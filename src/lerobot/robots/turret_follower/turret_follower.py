@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+import time
+from functools import cached_property
+
+from lerobot.motors import Motor, MotorCalibration, MotorNormMode
+from lerobot.motors.dynamixel import DynamixelMotorsBus, OperatingMode
+from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+
+from ..robot import Robot
+from ..utils import ensure_safe_goal_position
+from .config_turret_follower import TurretFollowerConfig
+
+logger = logging.getLogger(__name__)
+
+
+class TurretFollower(Robot):
+    config_class = TurretFollowerConfig
+    name = "turretF"
+
+    def __init__(self, config: TurretFollowerConfig):
+        super().__init__(config)
+        self.config = config
+        norm_mode = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
+        self.bus = DynamixelMotorsBus(
+            port=self.config.port,
+            motors={
+                "shoulder": Motor(1, "xm430-w350", norm_mode),
+                "gripper": Motor(2, "xm430-w350", norm_mode),
+            },
+            calibration=self.calibration,
+        )
+        self.bus.default_baudrate = self.config.baudrate
+
+    @property
+    def _motor_obs_ft(self) -> dict[str, type]:
+        return {
+            "shoulder.pos": float,
+            "gripper.pos": float,
+            "shoulder.current": float,
+            "gripper.current": float,
+        }
+
+    @cached_property
+    def observation_features(self) -> dict[str, type | tuple]:
+        return self._motor_obs_ft
+
+    @cached_property
+    def action_features(self) -> dict[str, type]:
+        return {"shoulder.pos": float, "gripper.pos": float}
+
+    @property
+    def is_connected(self) -> bool:
+        return self.bus.is_connected
+
+    @check_if_already_connected
+    def connect(self, calibrate: bool = True) -> None:
+        self.bus.connect()
+        if not self.is_calibrated and calibrate:
+            self.calibrate()
+        self.configure()
+        logger.info(f"{self} connected.")
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self.bus.is_calibrated
+
+    def calibrate(self) -> None:
+        self.bus.disable_torque()
+        for motor in self.bus.motors:
+            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+
+        self.calibration = {}
+        for motor, m in self.bus.motors.items():
+            self.calibration[motor] = MotorCalibration(
+                id=m.id,
+                drive_mode=0,
+                homing_offset=0,
+                range_min=0,
+                range_max=4095,
+            )
+
+        self.bus.write_calibration(self.calibration)
+        self._save_calibration()
+
+    def configure(self) -> None:
+        with self.bus.torque_disabled():
+            self.bus.configure_motors()
+            for motor in self.bus.motors:
+                self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+                self.bus.write("Current_Limit", motor, 200)
+
+    def setup_motors(self) -> None:
+        for motor in reversed(self.bus.motors):
+            input(f"Connect the controller board to the '{motor}' motor only and press enter.")
+            self.bus.setup_motor(motor)
+            print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
+
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        start = time.perf_counter()
+        pos = self.bus.sync_read("Present_Position")
+        cur = self.bus.sync_read("Present_Current")
+        obs = {
+            "shoulder.pos": float(pos["shoulder"]),
+            "gripper.pos": float(pos["gripper"]),
+            "shoulder.current": float(cur["shoulder"]),
+            "gripper.current": float(cur["gripper"]),
+        }
+        dt_ms = (time.perf_counter() - start) * 1e3
+        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        return obs
+
+    @check_if_not_connected
+    def send_action(self, action: RobotAction) -> RobotAction:
+        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+
+        if self.config.max_relative_target is not None:
+            present_pos = self.bus.sync_read("Present_Position")
+            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+        self.bus.sync_write("Goal_Position", goal_pos)
+        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+
+    @check_if_not_connected
+    def disconnect(self) -> None:
+        self.bus.disconnect(self.config.disable_torque_on_disconnect)
+        logger.info(f"{self} disconnected.")

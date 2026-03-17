@@ -73,6 +73,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so_follower,
+    dynamixel_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,
@@ -81,6 +82,7 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     so_follower,
+    turret_follower,
     unitree_g1 as unitree_g1_robot,
 )
 from lerobot.teleoperators import (  # noqa: F401
@@ -98,6 +100,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     reachy2_teleoperator,
     so_leader,
+    turret_leader,
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -163,8 +166,14 @@ def teleop_loop(
         # given that it is the identity processor as default
         obs = robot.get_observation()
 
-        if robot.name == "unitree_g1":
-            teleop.send_feedback(obs)
+        if teleop.feedback_features:
+            feedback = {
+                key: obs[key]
+                for key in teleop.feedback_features
+                if key in obs and isinstance(obs[key], (int, float))
+            }
+            if feedback:
+                teleop.send_feedback(feedback)
 
         # Get teleop action
         raw_action = teleop.get_action()

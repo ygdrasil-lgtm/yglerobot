@@ -43,18 +43,28 @@ class OmxLeader(Teleoperator):
     def __init__(self, config: OmxLeaderConfig):
         super().__init__(config)
         self.config = config
+        # Map follower joint names to leader joint names for haptic current feedback.
+        self.feedback_motor_map = {
+            "shoulder_pan": "shoulder_pan",
+            "shoulder_lift": "shoulder_lift",
+            "elbow_flex": "elbow_flex",
+            "wrist_flex": "wrist_flex",
+            "wrist_roll": "wrist_roll",
+            "gripper": "gripper",
+        }
         self.bus = DynamixelMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(1, "xl330-m288", MotorNormMode.RANGE_M100_100),
-                "shoulder_lift": Motor(2, "xl330-m288", MotorNormMode.RANGE_M100_100),
-                "elbow_flex": Motor(3, "xl330-m288", MotorNormMode.RANGE_M100_100),
-                "wrist_flex": Motor(4, "xl330-m288", MotorNormMode.RANGE_M100_100),
-                "wrist_roll": Motor(5, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "shoulder_pan": Motor(1, "xm430-w350", MotorNormMode.RANGE_M100_100),
+                "shoulder_lift": Motor(2, "xm430-w350", MotorNormMode.RANGE_M100_100),
+                "elbow_flex": Motor(3, "xm430-w350", MotorNormMode.RANGE_M100_100),
+                "wrist_flex": Motor(4, "xm430-w350", MotorNormMode.RANGE_M100_100),
+                "wrist_roll": Motor(5, "xm430-w350", MotorNormMode.RANGE_M100_100),
                 "gripper": Motor(6, "xl330-m077", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
+        self.bus.default_baudrate = self.config.baudrate
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -62,7 +72,7 @@ class OmxLeader(Teleoperator):
 
     @property
     def feedback_features(self) -> dict[str, type]:
-        return {}
+        return {f"{follower_joint}.current": float for follower_joint in self.feedback_motor_map}
 
     @property
     def is_connected(self) -> bool:
@@ -89,7 +99,7 @@ class OmxLeader(Teleoperator):
         logger.info(f"\nUsing factory default calibration values for {self}")
         logger.info(f"\nWriting default configuration of {self} to the motors")
         for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
 
         for motor in self.bus.motors:
             if motor == "gripper":
@@ -116,24 +126,14 @@ class OmxLeader(Teleoperator):
         self.bus.disable_torque()
         self.bus.configure_motors()
         for motor in self.bus.motors:
-            if motor != "gripper":
-                # Use 'extended position mode' for all motors except gripper, because in joint mode the servos
-                # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while
-                # assembling the arm, you could end up with a servo with a position 0 or 4095 at a crucial
-                # point
-                self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
 
             if motor == "gripper":
                 self.bus.write("Drive_Mode", motor, DriveMode.INVERTED.value)
             else:
                 self.bus.write("Drive_Mode", motor, DriveMode.NON_INVERTED.value)
 
-        # Use 'position control current based' for gripper to be limited by the limit of the current.
-        # For the follower gripper, it means it can grasp an object without forcing too much even tho,
-        # its goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
-        # For the leader gripper, it means we can use it as a physical trigger, since we can force with our finger
-        # to make it move, and it will move back to its original target position when we release the force.
-        self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
+        # Current-position mode plus goal-current enables simple current-based haptic behavior.
         self.bus.write("Current_Limit", "gripper", 100)
         self.bus.write("Goal_Current", "gripper", 100)
         self.bus.write("Homing_Offset", "gripper", 100)
@@ -158,8 +158,14 @@ class OmxLeader(Teleoperator):
         return action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO(rcadene, aliberts): Implement force feedback
-        raise NotImplementedError
+        for follower_joint, leader_joint in self.feedback_motor_map.items():
+            key = f"{follower_joint}.current"
+            if key not in feedback:
+                continue
+
+            # Map observed follower current magnitude to leader goal current.
+            target_current = int(max(0, min(100, abs(feedback[key]))))
+            self.bus.write("Goal_Current", leader_joint, target_current, normalize=False)
 
     @check_if_not_connected
     def disconnect(self) -> None:

@@ -164,6 +164,7 @@ available_robots = [
     "koch",
     "koch_bimanual",
     "aloha",
+    "dynamixel_follower",
     "so100",
     "so101",
 ]

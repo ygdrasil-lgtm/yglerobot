@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,13 +17,8 @@ from dataclasses import dataclass
 from ..config import TeleoperatorConfig
 
 
-@TeleoperatorConfig.register_subclass("omx_leader")
+@TeleoperatorConfig.register_subclass("turretL")
 @dataclass
-class OmxLeaderConfig(TeleoperatorConfig):
-    # Port to connect to the arm
+class TurretLeaderConfig(TeleoperatorConfig):
     port: str
-    baudrate: int = 1_000_000
-
-    # Sets the arm in torque mode with the gripper motor set to this value. This makes it possible to squeeze
-    # the gripper and have it spring back to an open position on its own.
-    gripper_open_pos: float = 60.0
+    baudrate: int = 4_000_000

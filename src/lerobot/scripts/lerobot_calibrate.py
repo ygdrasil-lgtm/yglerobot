@@ -38,6 +38,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so_follower,
+    dynamixel_follower,
     hope_jr,
     koch_follower,
     lekiwi,
@@ -45,6 +46,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     openarm_follower,
     so_follower,
+    turret_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -58,6 +60,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_leader,
     openarm_mini,
     so_leader,
+    turret_leader,
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins

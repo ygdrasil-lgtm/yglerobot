@@ -24,6 +24,7 @@ from ..config import RobotConfig
 class OmxFollowerConfig(RobotConfig):
     # Port to connect to the arm
     port: str
+    baudrate: int = 1_000_000
 
     disable_torque_on_disconnect: bool = True
 

@@ -51,20 +51,25 @@ class OmxFollower(Robot):
         self.bus = DynamixelMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(11, "xl430-w250", norm_mode_body),
-                "shoulder_lift": Motor(12, "xl430-w250", norm_mode_body),
-                "elbow_flex": Motor(13, "xl430-w250", norm_mode_body),
+                "shoulder_pan": Motor(11, "xm430-w350", norm_mode_body),
+                "shoulder_lift": Motor(12, "xm430-w350", norm_mode_body),
+                "elbow_flex": Motor(13, "xm430-w350", norm_mode_body),
                 "wrist_flex": Motor(14, "xl330-m288", norm_mode_body),
                 "wrist_roll": Motor(15, "xl330-m288", norm_mode_body),
                 "gripper": Motor(16, "xl330-m288", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
+        self.bus.default_baudrate = self.config.baudrate
         self.cameras = make_cameras_from_configs(config.cameras)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
-        return {f"{motor}.pos": float for motor in self.bus.motors}
+        features: dict[str, type] = {}
+        for motor in self.bus.motors:
+            features[f"{motor}.pos"] = float
+            features[f"{motor}.current"] = float
+        return features
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
@@ -78,7 +83,7 @@ class OmxFollower(Robot):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        return self._motors_ft
+        return {f"{motor}.pos": float for motor in self.bus.motors}
 
     @property
     def is_connected(self) -> bool:
@@ -115,7 +120,7 @@ class OmxFollower(Robot):
         logger.info(f"\nUsing factory default calibration values for {self}")
         logger.info(f"\nWriting default configuration of {self} to the motors")
         for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
 
         for motor in self.bus.motors:
             self.bus.write("Drive_Mode", motor, DriveMode.NON_INVERTED.value)
@@ -137,20 +142,9 @@ class OmxFollower(Robot):
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
-            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos
-            # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling
-            # the arm, you could end up with a servo with a position 0 or 4095 at a crucial point
+            # Use current-based position mode to support haptic feedback via motor current.
             for motor in self.bus.motors:
-                if motor != "gripper":
-                    self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-
-            # Use 'position control current based' for gripper to be limited by the limit of the current. For
-            # the follower gripper, it means it can grasp an object without forcing too much even tho, its
-            # goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
-            # For the leader gripper, it means we can use it as a physical trigger, since we can force with
-            # our finger to make it move, and it will move back to its original target position when we
-            # release the force.
-            self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
+                self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
 
             # Set better PID values to close the gap between recorded states and actions
             # TODO(rcadene): Implement an automatic procedure to set optimal PID values for each motor
@@ -170,6 +164,8 @@ class OmxFollower(Robot):
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
+        current_dict = self.bus.sync_read("Present_Current")
+        obs_dict.update({f"{motor}.current": float(val) for motor, val in current_dict.items()})
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 

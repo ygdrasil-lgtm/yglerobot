@@ -28,6 +28,14 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .koch_follower import KochFollower
 
         return KochFollower(config)
+    elif config.type == "dynamixel_follower":
+        from .dynamixel_follower import DynamixelFollower
+
+        return DynamixelFollower(config)
+    elif config.type == "turretF":
+        from .turret_follower import TurretFollower
+
+        return TurretFollower(config)
     elif config.type == "omx_follower":
         from .omx_follower import OmxFollower
 

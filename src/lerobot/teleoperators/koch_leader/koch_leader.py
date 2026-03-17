@@ -56,6 +56,7 @@ class KochLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
+        self.bus.default_baudrate = self.config.baudrate
 
     @property
     def action_features(self) -> dict[str, type]:

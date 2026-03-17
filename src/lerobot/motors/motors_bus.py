@@ -518,7 +518,9 @@ class SerialMotorsBus(MotorsBusBase):
         try:
             if not self.port_handler.openPort():
                 raise OSError(f"Failed to open port '{self.port}'.")
-            elif handshake:
+            # Ensure the serial port baudrate matches bus default before any handshake reads.
+            self.set_baudrate(self.default_baudrate)
+            if handshake:
                 self._handshake()
         except (FileNotFoundError, OSError, serial.SerialException) as e:
             raise ConnectionError(

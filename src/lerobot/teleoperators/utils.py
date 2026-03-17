@@ -47,6 +47,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .omx_leader import OmxLeader
 
         return OmxLeader(config)
+    elif config.type == "turretL":
+        from .turret_leader import TurretLeader
+
+        return TurretLeader(config)
     elif config.type == "so100_leader":
         from .so_leader import SO100Leader
 

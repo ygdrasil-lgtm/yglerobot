@@ -105,6 +105,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so_follower,
+    dynamixel_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,

@@ -24,6 +24,7 @@ from ..config import TeleoperatorConfig
 class KochLeaderConfig(TeleoperatorConfig):
     # Port to connect to the arm
     port: str
+    baudrate: int = 1_000_000
 
     # Sets the arm in torque mode with the gripper motor set to this value. This makes it possible to squeeze
     # the gripper and have it spring back to an open position on its own.

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,9 +19,9 @@ from lerobot.cameras import CameraConfig
 from ..config import RobotConfig
 
 
-@RobotConfig.register_subclass("koch_follower")
+@RobotConfig.register_subclass("dynamixel_follower")
 @dataclass
-class KochFollowerConfig(RobotConfig):
+class DynamixelFollowerConfig(RobotConfig):
     # Port to connect to the arm
     port: str
     baudrate: int = 1_000_000
