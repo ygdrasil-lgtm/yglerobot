@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from lerobot.cameras import CameraConfig
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
 from ..config import RobotConfig
 
@@ -25,3 +28,19 @@ class TurretFollowerConfig(RobotConfig):
     disable_torque_on_disconnect: bool = True
     max_relative_target: float | dict[str, float] | None = None
     use_degrees: bool = False
+    cameras: dict[str, CameraConfig] = field(
+        default_factory=lambda: {
+            "topCam": OpenCVCameraConfig(
+                index_or_path=0,
+                fps=30,
+                width=1920,
+                height=1080,
+            ),
+            "wristCam": OpenCVCameraConfig(
+                index_or_path=2,
+                fps=30,
+                width=1920,
+                height=1080,
+            )
+        }
+    )

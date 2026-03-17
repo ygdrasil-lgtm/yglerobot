@@ -18,6 +18,7 @@ import logging
 import time
 from functools import cached_property
 
+from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.dynamixel import DynamixelMotorsBus, OperatingMode
 from lerobot.types import RobotAction, RobotObservation
@@ -47,6 +48,7 @@ class TurretFollower(Robot):
             calibration=self.calibration,
         )
         self.bus.default_baudrate = self.config.baudrate
+        self.cameras = make_cameras_from_configs(config.cameras)
 
     @property
     def _motor_obs_ft(self) -> dict[str, type]:
@@ -57,9 +59,16 @@ class TurretFollower(Robot):
             "gripper.current": float,
         }
 
+    @property
+    def _camera_ft(self) -> dict[str, tuple]:
+        return {
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3)
+            for cam in self.cameras
+        }
+
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return self._motor_obs_ft
+        return {**self._motor_obs_ft, **self._camera_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -67,13 +76,15 @@ class TurretFollower(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return self.bus.is_connected
+        return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         self.bus.connect()
         if not self.is_calibrated and calibrate:
             self.calibrate()
+        for cam in self.cameras.values():
+            cam.connect()
         self.configure()
         logger.info(f"{self} connected.")
 
@@ -123,6 +134,10 @@ class TurretFollower(Robot):
             "shoulder.current": float(cur["shoulder"]),
             "gripper.current": float(cur["gripper"]),
         }
+
+        for cam_key, cam in self.cameras.items():
+            obs[cam_key] = cam.read_latest()
+
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
         return obs
@@ -142,4 +157,6 @@ class TurretFollower(Robot):
     @check_if_not_connected
     def disconnect(self) -> None:
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
+        for cam in self.cameras.values():
+            cam.disconnect()
         logger.info(f"{self} disconnected.")
