@@ -15,6 +15,8 @@
 # limitations under the License.
 
 import logging
+import os
+import sys
 import time
 
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
@@ -34,6 +36,8 @@ class TurretLeader(Teleoperator):
     def __init__(self, config: TurretLeaderConfig):
         super().__init__(config)
         self.config = config
+        self._last_realtime_debug_print_s = 0.0
+        self._filtered_input_current_ma: dict[str, float] = {}
         self.feedback_motor_map = {
             "shoulder": "shoulder",
             "gripper": "gripper",
@@ -61,11 +65,48 @@ class TurretLeader(Teleoperator):
         return self.bus.is_connected
 
     @property
-    def _max_feedback_current(self) -> int:
+    def _max_feedback_current(self) -> float:
         # `current_limit` is kept as a backward-compatible alias for `max_current`.
         if self.config.current_limit is not None:
-            return int(self.config.current_limit)
-        return int(self.config.max_current)
+            return float(self.config.current_limit)
+        return float(self.config.max_current)
+
+    def _max_feedback_current_for_joint(self, joint: str) -> float:
+        if joint in self.config.max_current_per_joint:
+            return float(self.config.max_current_per_joint[joint])
+        return self._max_feedback_current
+
+    def _apply_deadband(self, value: float, deadband: float) -> float:
+        if abs(value) <= deadband:
+            return 0.0
+        return value - deadband if value > 0 else value + deadband
+
+    def _to_leader_raw_current(self, leader_joint: str, current_ma: float) -> int:
+        lsb = self.config.leader_goal_current_lsb_ma.get(leader_joint, 2.69)
+        if lsb <= 0:
+            lsb = 1.0
+        return int(round(current_ma / lsb))
+
+    @property
+    def _realtime_debug_enabled(self) -> bool:
+        # Env fallback is useful when CLI nested config parsing is uncertain.
+        env_force = os.getenv("LEROBOT_DEBUG_FEEDBACK_REALTIME", "").strip().lower()
+        env_true = env_force in {"1", "true", "yes", "on"}
+
+        # CLI fallback for cases where nested teleop config flags are not
+        # propagated into the dataclass instance.
+        cli_true = False
+        for arg in sys.argv[1:]:
+            if arg.startswith("--teleop.debug_feedback_realtime="):
+                value = arg.split("=", 1)[1].strip().lower()
+                cli_true = value in {"1", "true", "yes", "on"}
+                break
+            if arg.startswith("--debug_feedback_realtime="):
+                value = arg.split("=", 1)[1].strip().lower()
+                cli_true = value in {"1", "true", "yes", "on"}
+                break
+
+        return bool(self.config.debug_feedback_realtime or env_true or cli_true)
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
@@ -73,6 +114,13 @@ class TurretLeader(Teleoperator):
         if not self.is_calibrated and calibrate:
             self.calibrate()
         self.configure()
+        logger.info(
+            "TurretLeader feedback debug | "
+            f"debug_feedback={self.config.debug_feedback} "
+            f"debug_feedback_realtime={self.config.debug_feedback_realtime} "
+            f"effective_realtime={self._realtime_debug_enabled} "
+            f"debug_feedback_realtime_hz={self.config.debug_feedback_realtime_hz}"
+        )
         logger.info(f"{self} connected.")
 
     @property
@@ -121,7 +169,6 @@ class TurretLeader(Teleoperator):
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
-            max_current = self._max_feedback_current
             for motor in self.bus.motors:
                 # Pure Current Control mode (0): motor torque ∝ Goal_Current directly.
                 # Present_Position is still readable in this mode.
@@ -129,7 +176,9 @@ class TurretLeader(Teleoperator):
                 # to the follower as Goal_Position. Haptic resistance is achieved by
                 # writing scaled follower Present_Current back as Goal_Current here.
                 self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT.value)
-                self.bus.write("Current_Limit", motor, max_current)
+                max_current_ma = self._max_feedback_current_for_joint(motor)
+                max_current_raw = max(0, self._to_leader_raw_current(motor, max_current_ma))
+                self.bus.write("Current_Limit", motor, max_current_raw)
                 self.bus.write("Goal_Current", motor, 0)
 
     def setup_motors(self) -> None:
@@ -157,17 +206,69 @@ class TurretLeader(Teleoperator):
         leader: Goal_Current ∝ -(follower_current). The command is scaled by
         per-joint gain and clamped to ±max_current for safety.
         """
-        limit = self._max_feedback_current
         gains = self.config.feedback_gain
         directions = self.config.feedback_direction
+        debug_parts: list[str] = []
         for follower_joint, leader_joint in self.feedback_motor_map.items():
+            limit_ma = self._max_feedback_current_for_joint(leader_joint)
             key = f"{follower_joint}.current"
             if key not in feedback:
                 continue
+
+            # 1) Convert follower raw current register value to mA.
+            input_lsb_ma = self.config.feedback_input_lsb_ma.get(follower_joint, 2.69)
+            follower_current_raw = float(feedback[key])
+            follower_current_ma = follower_current_raw * input_lsb_ma
+
+            # 2) Compensate supply-current measurements (XL330-like behavior) via LPF.
+            if self.config.feedback_input_is_supply_current.get(follower_joint, False):
+                alpha = self.config.feedback_input_filter_alpha.get(follower_joint, 0.15)
+                alpha = max(0.0, min(1.0, alpha))
+                prev = self._filtered_input_current_ma.get(follower_joint, follower_current_ma)
+                follower_current_ma = alpha * follower_current_ma + (1.0 - alpha) * prev
+                self._filtered_input_current_ma[follower_joint] = follower_current_ma
+
+            # 3) Apply deadband to suppress tiny near-zero noise.
+            deadband_ma = self.config.feedback_deadband_ma.get(follower_joint, 0.0)
+            follower_current_ma = self._apply_deadband(follower_current_ma, deadband_ma)
+
+            # 4) Normalize follower effort to [-1, 1] and re-scale to leader max mA.
+            input_max_ma = self.config.feedback_input_max_ma.get(follower_joint, limit_ma)
+            input_max_ma = max(1e-6, input_max_ma)
+            normalized_effort = max(-1.0, min(1.0, follower_current_ma / input_max_ma))
+
             gain = gains.get(follower_joint, 1.0)
             direction = directions.get(follower_joint, 1.0)
-            target_current = int(max(-limit, min(limit, -feedback[key] * gain * direction)))
-            self.bus.write("Goal_Current", leader_joint, target_current, normalize=False)
+            target_current_ma = max(
+                -limit_ma,
+                min(limit_ma, -normalized_effort * limit_ma * gain * direction),
+            )
+
+            # 5) Quantize mA command to leader model raw current unit.
+            target_current_raw = self._to_leader_raw_current(leader_joint, target_current_ma)
+            max_raw = max(0, self._to_leader_raw_current(leader_joint, limit_ma))
+            target_current_raw = int(max(-max_raw, min(max_raw, target_current_raw)))
+
+            self.bus.write("Goal_Current", leader_joint, target_current_raw, normalize=False)
+            debug_parts.append(
+                f"{follower_joint}: Iraw={follower_current_raw:.1f}, I={follower_current_ma:.1f}mA"
+                f" -> {leader_joint}.Goal_Current={target_current_raw} ({target_current_ma:.1f}mA)"
+            )
+
+        if debug_parts:
+            debug_line = "Haptic feedback | " + " | ".join(debug_parts)
+            if self.config.debug_feedback:
+                logger.info(debug_line)
+            if self._realtime_debug_enabled:
+                hz = self.config.debug_feedback_realtime_hz
+                if hz is None or hz <= 0:
+                    print(debug_line, flush=True)
+                else:
+                    now_s = time.perf_counter()
+                    period_s = 1.0 / hz
+                    if now_s - self._last_realtime_debug_print_s >= period_s:
+                        print(debug_line, flush=True)
+                        self._last_realtime_debug_print_s = now_s
 
     @check_if_not_connected
     def disconnect(self) -> None:

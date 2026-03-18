@@ -135,10 +135,10 @@ class TurretFollower(Robot):
         with self.bus.torque_disabled():
             self.bus.configure_motors()
             for motor in self.bus.motors:
-                # Extended Position mode: PID-based position tracking with full torque.
-                # Present_Current reflects actual motor load and is fed back to the leader
+                # Position mode: single-turn PID position tracking.
+                # Present_Current reflects motor load and is fed back to the leader
                 # as Goal_Current to produce proportional haptic resistance.
-                self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+                self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
                 self.bus.write("Current_Limit", motor, 1000)
 
     def setup_motors(self) -> None:

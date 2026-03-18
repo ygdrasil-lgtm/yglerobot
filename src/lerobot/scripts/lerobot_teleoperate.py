@@ -54,6 +54,7 @@ lerobot-teleoperate \
 import logging
 import time
 from dataclasses import asdict, dataclass
+from numbers import Real
 from pprint import pformat
 
 import rerun as rr
@@ -115,7 +116,7 @@ class TeleoperateConfig:
     teleop: TeleoperatorConfig
     robot: RobotConfig
     # Limit the maximum frames per second.
-    fps: int = 60
+    fps: int = 100
     teleop_time_s: float | None = None
     # Display all cameras on screen
     display_data: bool = False
@@ -125,6 +126,12 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    # Global fallback debug flags for teleop feedback printing.
+    # These are applied onto teleop config at runtime and are useful when
+    # nested `--teleop.*` flags are not propagated in some launcher setups.
+    debug_feedback: bool | None = None
+    debug_feedback_realtime: bool | None = None
+    debug_feedback_realtime_hz: float | None = None
 
 
 def teleop_loop(
@@ -156,6 +163,10 @@ def teleop_loop(
     """
 
     display_len = max(len(key) for key in robot.action_features)
+    realtime_feedback_enabled = bool(
+        getattr(teleop, "_realtime_debug_enabled", False)
+        or getattr(getattr(teleop, "config", object()), "debug_feedback_realtime", False)
+    )
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
@@ -168,9 +179,9 @@ def teleop_loop(
 
         if teleop.feedback_features:
             feedback = {
-                key: obs[key]
+                key: float(obs[key])
                 for key in teleop.feedback_features
-                if key in obs and isinstance(obs[key], (int, float))
+                if key in obs and isinstance(obs[key], Real)
             }
             if feedback:
                 teleop.send_feedback(feedback)
@@ -202,13 +213,15 @@ def teleop_loop(
             # Display the final robot action that was sent
             for motor, value in robot_action_to_send.items():
                 print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 3)
+            if not realtime_feedback_enabled:
+                move_cursor_up(len(robot_action_to_send) + 3)
 
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
-        print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
-        move_cursor_up(1)
+        if not realtime_feedback_enabled:
+            print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+            move_cursor_up(1)
 
         if duration is not None and time.perf_counter() - start >= duration:
             return
@@ -218,6 +231,62 @@ def teleop_loop(
 def teleoperate(cfg: TeleoperateConfig):
     init_logging()
     logging.info(pformat(asdict(cfg)))
+
+    # Compatibility override: some parser paths may miss subclass-only nested
+    # flags. Apply raw CLI values directly when provided.
+    if isinstance(cfg.teleop, TeleoperatorConfig):
+        raw_debug_realtime = parser.parse_arg("teleop.debug_feedback_realtime")
+        if raw_debug_realtime is not None and hasattr(cfg.teleop, "debug_feedback_realtime"):
+            cfg.teleop.debug_feedback_realtime = raw_debug_realtime.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        raw_debug_hz = parser.parse_arg("teleop.debug_feedback_realtime_hz")
+        if raw_debug_hz is not None and hasattr(cfg.teleop, "debug_feedback_realtime_hz"):
+            cfg.teleop.debug_feedback_realtime_hz = float(raw_debug_hz)
+
+        raw_debug_feedback = parser.parse_arg("teleop.debug_feedback")
+        if raw_debug_feedback is not None and hasattr(cfg.teleop, "debug_feedback"):
+            cfg.teleop.debug_feedback = raw_debug_feedback.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        # Also support top-level flags as a robust fallback.
+        # Precedence: explicit top-level arg > explicit teleop.* arg > config default.
+        raw_global_debug_feedback = parser.parse_arg("debug_feedback")
+        if raw_global_debug_feedback is not None and hasattr(cfg.teleop, "debug_feedback"):
+            cfg.teleop.debug_feedback = raw_global_debug_feedback.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        elif cfg.debug_feedback is not None and hasattr(cfg.teleop, "debug_feedback"):
+            cfg.teleop.debug_feedback = bool(cfg.debug_feedback)
+
+        raw_global_debug_realtime = parser.parse_arg("debug_feedback_realtime")
+        if raw_global_debug_realtime is not None and hasattr(cfg.teleop, "debug_feedback_realtime"):
+            cfg.teleop.debug_feedback_realtime = raw_global_debug_realtime.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        elif cfg.debug_feedback_realtime is not None and hasattr(cfg.teleop, "debug_feedback_realtime"):
+            cfg.teleop.debug_feedback_realtime = bool(cfg.debug_feedback_realtime)
+
+        raw_global_debug_hz = parser.parse_arg("debug_feedback_realtime_hz")
+        if raw_global_debug_hz is not None and hasattr(cfg.teleop, "debug_feedback_realtime_hz"):
+            cfg.teleop.debug_feedback_realtime_hz = float(raw_global_debug_hz)
+        elif cfg.debug_feedback_realtime_hz is not None and hasattr(cfg.teleop, "debug_feedback_realtime_hz"):
+            cfg.teleop.debug_feedback_realtime_hz = float(cfg.debug_feedback_realtime_hz)
+
     if cfg.display_data:
         init_rerun(session_name="teleoperation", ip=cfg.display_ip, port=cfg.display_port)
     display_compressed_images = (
@@ -229,6 +298,18 @@ def teleoperate(cfg: TeleoperateConfig):
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+
+    if hasattr(teleop, "config"):
+        realtime = getattr(teleop.config, "debug_feedback_realtime", None)
+        realtime_hz = getattr(teleop.config, "debug_feedback_realtime_hz", None)
+        debug_feedback = getattr(teleop.config, "debug_feedback", None)
+        if any(v is not None for v in (debug_feedback, realtime, realtime_hz)):
+            logging.info(
+                "Teleop debug settings | "
+                f"debug_feedback={debug_feedback} "
+                f"debug_feedback_realtime={realtime} "
+                f"debug_feedback_realtime_hz={realtime_hz}"
+            )
 
     teleop.connect()
     robot.connect()
