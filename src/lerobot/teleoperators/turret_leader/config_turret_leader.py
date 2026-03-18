@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..config import TeleoperatorConfig
 
@@ -22,3 +22,24 @@ from ..config import TeleoperatorConfig
 class TurretLeaderConfig(TeleoperatorConfig):
     port: str
     baudrate: int = 4_000_000
+    # Maximum absolute current (mA) allowed for leader haptic feedback.
+    # Used both for motor Current_Limit and software clipping of Goal_Current.
+    max_current: int = 100
+    # Backward-compatible alias; if provided, it overrides max_current.
+    current_limit: int | None = None
+    # Per-joint scaling applied to follower Present_Current before writing to
+    # leader Goal_Current. Tune to adjust haptic intensity per joint.
+    # Formula: Goal_Current = clamp(-follower_current * gain * direction, -max_current, max_current)
+    feedback_gain: dict[str, float] = field(
+        default_factory=lambda: {
+            "shoulder": 0.2,
+            "gripper": 1.0,
+        }
+    )
+    # Per-joint direction correction. Keep +1.0 unless a joint is mechanically inverted.
+    feedback_direction: dict[str, float] = field(
+        default_factory=lambda: {
+            "shoulder": 1.0,
+            "gripper": 1.0,
+        }
+    )

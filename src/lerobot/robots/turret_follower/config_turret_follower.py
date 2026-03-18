@@ -28,6 +28,8 @@ class TurretFollowerConfig(RobotConfig):
     disable_torque_on_disconnect: bool = True
     max_relative_target: float | dict[str, float] | None = None
     use_degrees: bool = False
+    cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    """
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
             "topCam": OpenCVCameraConfig(
@@ -44,3 +46,4 @@ class TurretFollowerConfig(RobotConfig):
             )
         }
     )
+    """

@@ -60,6 +60,13 @@ class TurretLeader(Teleoperator):
     def is_connected(self) -> bool:
         return self.bus.is_connected
 
+    @property
+    def _max_feedback_current(self) -> int:
+        # `current_limit` is kept as a backward-compatible alias for `max_current`.
+        if self.config.current_limit is not None:
+            return int(self.config.current_limit)
+        return int(self.config.max_current)
+
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         self.bus.connect()
@@ -74,27 +81,55 @@ class TurretLeader(Teleoperator):
 
     def calibrate(self) -> None:
         self.bus.disable_torque()
+        if self.calibration:
+            user_input = input(
+                f"Press ENTER to use existing calibration for '{self.id}', "
+                "or type 'c' and press ENTER to re-run calibration: "
+            )
+            if user_input.strip().lower() != "c":
+                logger.info(f"Writing existing calibration for '{self.id}' to the motors.")
+                self.bus.write_calibration(self.calibration)
+                return
+
+        logger.info(f"\nRunning calibration of {self}")
+        # Use EXTENDED_POSITION during calibration so motors can rotate freely.
         for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+
+        input(f"Move {self} to the middle of its range of motion and press ENTER....")
+        homing_offsets = self.bus.set_half_turn_homings()
+
+        print(
+            "Move all joints sequentially through their entire ranges of motion.\n"
+            "Recording positions. Press ENTER to stop..."
+        )
+        range_mins, range_maxes = self.bus.record_ranges_of_motion(list(self.bus.motors))
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=0,
-                homing_offset=0,
-                range_min=0,
-                range_max=4095,
+                homing_offset=homing_offsets[motor],
+                range_min=range_mins[motor],
+                range_max=range_maxes[motor],
             )
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
+        logger.info(f"Calibration saved to {self.calibration_fpath}")
 
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
+            max_current = self._max_feedback_current
             for motor in self.bus.motors:
-                self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
-                self.bus.write("Current_Limit", motor, 200)
+                # Pure Current Control mode (0): motor torque ∝ Goal_Current directly.
+                # Present_Position is still readable in this mode.
+                # The operator's hand motion is tracked via Present_Position and sent
+                # to the follower as Goal_Position. Haptic resistance is achieved by
+                # writing scaled follower Present_Current back as Goal_Current here.
+                self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT.value)
+                self.bus.write("Current_Limit", motor, max_current)
                 self.bus.write("Goal_Current", motor, 0)
 
     def setup_motors(self) -> None:
@@ -115,11 +150,23 @@ class TurretLeader(Teleoperator):
         }
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
+        """Map follower Present_Current → leader Goal_Current for haptic resistance.
+
+        Follower operates in Extended Position mode; its load current is proportional
+        to external forces. To render resistance, we apply opposite torque on the
+        leader: Goal_Current ∝ -(follower_current). The command is scaled by
+        per-joint gain and clamped to ±max_current for safety.
+        """
+        limit = self._max_feedback_current
+        gains = self.config.feedback_gain
+        directions = self.config.feedback_direction
         for follower_joint, leader_joint in self.feedback_motor_map.items():
             key = f"{follower_joint}.current"
             if key not in feedback:
                 continue
-            target_current = int(max(0, min(200, abs(feedback[key]))))
+            gain = gains.get(follower_joint, 1.0)
+            direction = directions.get(follower_joint, 1.0)
+            target_current = int(max(-limit, min(limit, -feedback[key] * gain * direction)))
             self.bus.write("Goal_Current", leader_joint, target_current, normalize=False)
 
     @check_if_not_connected

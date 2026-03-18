@@ -516,10 +516,10 @@ class SerialMotorsBus(MotorsBusBase):
 
     def _connect(self, handshake: bool = True) -> None:
         try:
+            # Pre-configure baudrate before opening so the port opens at the target rate directly.
+            self.port_handler.setBaudRate(self.default_baudrate)
             if not self.port_handler.openPort():
                 raise OSError(f"Failed to open port '{self.port}'.")
-            # Ensure the serial port baudrate matches bus default before any handshake reads.
-            self.set_baudrate(self.default_baudrate)
             if handshake:
                 self._handshake()
         except (FileNotFoundError, OSError, serial.SerialException) as e:

@@ -21,6 +21,7 @@ from functools import cached_property
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.dynamixel import DynamixelMotorsBus, OperatingMode
+
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
@@ -94,28 +95,51 @@ class TurretFollower(Robot):
 
     def calibrate(self) -> None:
         self.bus.disable_torque()
+        if self.calibration:
+            user_input = input(
+                f"Press ENTER to use existing calibration for '{self.id}', "
+                "or type 'c' and press ENTER to re-run calibration: "
+            )
+            if user_input.strip().lower() != "c":
+                logger.info(f"Writing existing calibration for '{self.id}' to the motors.")
+                self.bus.write_calibration(self.calibration)
+                return
+
+        logger.info(f"\nRunning calibration of {self}")
         for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+
+        input(f"Move {self} to the middle of its range of motion and press ENTER....")
+        homing_offsets = self.bus.set_half_turn_homings()
+
+        print(
+            "Move all joints sequentially through their entire ranges of motion.\n"
+            "Recording positions. Press ENTER to stop..."
+        )
+        range_mins, range_maxes = self.bus.record_ranges_of_motion(list(self.bus.motors))
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=0,
-                homing_offset=0,
-                range_min=0,
-                range_max=4095,
+                homing_offset=homing_offsets[motor],
+                range_min=range_mins[motor],
+                range_max=range_maxes[motor],
             )
-
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
+        logger.info(f"Calibration saved to {self.calibration_fpath}")
 
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
             for motor in self.bus.motors:
-                self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
-                self.bus.write("Current_Limit", motor, 200)
+                # Extended Position mode: PID-based position tracking with full torque.
+                # Present_Current reflects actual motor load and is fed back to the leader
+                # as Goal_Current to produce proportional haptic resistance.
+                self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+                self.bus.write("Current_Limit", motor, 1000)
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
