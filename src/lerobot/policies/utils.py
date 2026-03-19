@@ -247,3 +247,56 @@ def validate_visual_features_consistency(
 
     if not (policy_subset_of_dataset or dataset_subset_of_policy):
         raise_feature_mismatch_error(provided_visuals, expected_visuals)
+
+
+def validate_state_action_features_consistency(
+    cfg: PreTrainedConfig,
+    features: dict[str, PolicyFeature],
+) -> None:
+    """Validate non-visual input/output features between config and dataset/env features.
+
+    This check is stricter than visual-key validation because state/action mismatches
+    usually lead to shape errors at model load/forward time.
+    """
+    expected_state_env = {
+        k: v for k, v in cfg.input_features.items() if v.type in (FeatureType.STATE, FeatureType.ENV)
+    }
+    provided_state_env = {
+        k: v for k, v in features.items() if v.type in (FeatureType.STATE, FeatureType.ENV)
+    }
+
+    expected_keys = set(expected_state_env.keys())
+    provided_keys = set(provided_state_env.keys())
+    if expected_keys != provided_keys:
+        raise_feature_mismatch_error(provided_keys, expected_keys)
+
+    shape_mismatches = []
+    for key in expected_keys:
+        expected_shape = tuple(expected_state_env[key].shape)
+        provided_shape = tuple(provided_state_env[key].shape)
+        if expected_shape != provided_shape:
+            shape_mismatches.append((key, expected_shape, provided_shape))
+
+    if shape_mismatches:
+        details = "\n".join(
+            f"- {key}: expected shape {exp}, provided shape {prov}"
+            for key, exp, prov in shape_mismatches
+        )
+        raise ValueError(
+            "State/Env feature shape mismatch between dataset/environment and policy config.\n"
+            f"{details}\n\n"
+            "This commonly happens when loading an old pretrained config with a new dataset schema."
+        )
+
+    expected_action = cfg.output_features.get(ACTION)
+    provided_action = features.get(ACTION)
+    if expected_action is None or provided_action is None:
+        return
+
+    expected_action_shape = tuple(expected_action.shape)
+    provided_action_shape = tuple(provided_action.shape)
+    if expected_action_shape != provided_action_shape:
+        raise ValueError(
+            "Action feature shape mismatch between dataset/environment and policy config. "
+            f"Expected {expected_action_shape}, provided {provided_action_shape}."
+        )

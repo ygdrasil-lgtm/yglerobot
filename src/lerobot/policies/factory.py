@@ -39,7 +39,10 @@ from lerobot.policies.sac.reward_model.configuration_classifier import RewardCla
 from lerobot.policies.sarm.configuration_sarm import SARMConfig
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
-from lerobot.policies.utils import validate_visual_features_consistency
+from lerobot.policies.utils import (
+    validate_state_action_features_consistency,
+    validate_visual_features_consistency,
+)
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 from lerobot.policies.wall_x.configuration_wall_x import WallXConfig
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
@@ -524,7 +527,7 @@ def make_policy(
 
     if not rename_map:
         validate_visual_features_consistency(cfg, features)
-        # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
+        validate_state_action_features_consistency(cfg, features)
 
     return policy
 
