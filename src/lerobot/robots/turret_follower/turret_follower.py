@@ -135,11 +135,18 @@ class TurretFollower(Robot):
         with self.bus.torque_disabled():
             self.bus.configure_motors()
             for motor in self.bus.motors:
-                # Position mode: single-turn PID position tracking.
-                # Present_Current reflects motor load and is fed back to the leader
-                # as Goal_Current to produce proportional haptic resistance.
-                self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-                self.bus.write("Current_Limit", motor, 1000)
+                # Keep non-gripper joints in Position mode.
+                if motor == "gripper":
+                    # Gripper uses Current-based Position mode with a lower
+                    # current limit for safer compliant grasping.
+                    self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+                    self.bus.write("Current_Limit", motor, 70)
+                else:
+                    # Position mode: single-turn PID position tracking.
+                    # Present_Current reflects motor load and is fed back to the leader
+                    # as Goal_Current to produce proportional haptic resistance.
+                    self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+                    self.bus.write("Current_Limit", motor, 1000)
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):

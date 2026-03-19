@@ -32,8 +32,8 @@ class TurretLeaderConfig(TeleoperatorConfig):
     # If a joint is missing, it falls back to current_limit/max_current.
     max_current_per_joint: dict[str, float] = field(
         default_factory=lambda: {
-            "shoulder": 100.0,
-            "gripper": 500.0,
+            "shoulder": 20.0*2.69,
+            "gripper": 1750.0,
         }
     )
     # Per-joint scaling applied to follower Present_Current before writing to
@@ -41,8 +41,8 @@ class TurretLeaderConfig(TeleoperatorConfig):
     # Formula: Goal_Current = clamp(-follower_current * gain * direction, -max_current, max_current)
     feedback_gain: dict[str, float] = field(
         default_factory=lambda: {
-            "shoulder": 0.1,
-            "gripper": 1.0,
+            "shoulder": 0.2,
+            "gripper": 0.9,
         }
     )
     # Follower current conversion from raw register unit to mA.
@@ -55,10 +55,12 @@ class TurretLeaderConfig(TeleoperatorConfig):
     )
     # Follower current full-scale for normalization in mA.
     # Normalized effort = clip(input_mA / feedback_input_max_ma, -1, 1).
+    # follower의 current가 feedback_input_max_ma보다 크면, leader에 최대 haptic feedback이 전달된다. follower의 current가 feedback_input_max_ma보다 작으면, leader에 전달되는 haptic feedback이 줄어든다.
+    # follower의 current_limit 확인 필요. 예시: XM430-W350의 경우, current_limit이 1000mA라면 feedback_input_max_ma를 1000mA로 설정하여, follower의 최대 current에 대응하는 최대 haptic feedback이 leader에 전달되도록 할 수 있다.
     feedback_input_max_ma: dict[str, float] = field(
         default_factory=lambda: {
-            "shoulder": 1193.0,
-            "gripper": 1193.0,
+            "shoulder": 1000.0,
+            "gripper": 70.0,
         }
     )
     # If True, treat the follower current as supply current (e.g. XL330) and
@@ -66,7 +68,7 @@ class TurretLeaderConfig(TeleoperatorConfig):
     feedback_input_is_supply_current: dict[str, bool] = field(
         default_factory=lambda: {
             "shoulder": False,
-            "gripper": False,
+            "gripper": True,
         }
     )
     # Low-pass filter alpha for supply-current compensation.
@@ -77,8 +79,8 @@ class TurretLeaderConfig(TeleoperatorConfig):
     # 반응이 너무 느리면: alpha를 높임 (예: 0.25~0.35)
     feedback_input_filter_alpha: dict[str, float] = field(
         default_factory=lambda: {
-            "shoulder": 0.22,
-            "gripper": 0.115,
+            "shoulder": 0.35,
+            "gripper": 0.118,
         }
     )
     # Deadband in mA to suppress tiny current noise around zero.
@@ -108,8 +110,34 @@ class TurretLeaderConfig(TeleoperatorConfig):
     debug_feedback: bool = False
     # If True, prints feedback lines to stdout with flush=True every cycle so
     # values are visible in real time during `lerobot-teleoperate` execution.
-    debug_feedback_realtime: bool = True
+    debug_feedback_realtime: bool = False
     # Optional realtime print rate limit in Hz.
     # - `None` or <= 0: print every feedback cycle
     # - positive value: print at most this many lines per second (e.g. 10.0)
     debug_feedback_realtime_hz: float | None = 1.0
+
+    # Gripper feedback mode selection.
+    # "proportional": Current haptic feedback. Resistance proportional to follower current.
+    # "threshold_constant": Threshold-based constant force. Detects object contact (threshold)
+    #   and applies constant resistance ONLY when current exceeds threshold, to prevent chattering.
+    gripper_feedback_mode: str = "threshold_constant"
+
+    # Backward-compatible single threshold in mA for threshold_constant mode.
+    # If `gripper_feedback_threshold_on_ma` is None, this value is used as the ON threshold.
+    # follower 로봇의 gripper의 curent_based position 모드에서 current_limit과 동일한 또는 그보다 약간 낮은 값을 적용한다.
+    # 예시: XM430-W350의 경우, current_limit이 1000mA라면 threshold를 700mA로 설정하여, 그립핑이 감지되도록 할 수 있다.
+    gripper_feedback_threshold_ma: float = 65.0
+
+    # Hysteresis ON threshold in mA for threshold_constant mode.
+    # Contact becomes active when |follower_current| >= threshold_on.
+    # If None, falls back to `gripper_feedback_threshold_ma`.
+    gripper_feedback_threshold_on_ma: float | None = None
+
+    # Hysteresis OFF threshold in mA for threshold_constant mode.
+    # Contact is released when |follower_current| <= threshold_off.
+    # Use a smaller value than ON threshold to reduce boundary chattering.
+    gripper_feedback_threshold_off_ma: float = 50.0
+
+    # Constant resistance force in mA applied when follower current exceeds threshold
+    # in threshold_constant mode. Sign matches follower current direction.
+    gripper_feedback_constant_force_ma: float = 700.0

@@ -38,6 +38,7 @@ class TurretLeader(Teleoperator):
         self.config = config
         self._last_realtime_debug_print_s = 0.0
         self._filtered_input_current_ma: dict[str, float] = {}
+        self._gripper_contact_active = False
         self.feedback_motor_map = {
             "shoulder": "shoulder",
             "gripper": "gripper",
@@ -86,6 +87,17 @@ class TurretLeader(Teleoperator):
         if lsb <= 0:
             lsb = 1.0
         return int(round(current_ma / lsb))
+
+    def _get_gripper_hysteresis_thresholds(self) -> tuple[float, float]:
+        threshold_on = self.config.gripper_feedback_threshold_on_ma
+        if threshold_on is None:
+            threshold_on = self.config.gripper_feedback_threshold_ma
+        threshold_on = abs(float(threshold_on))
+
+        threshold_off = abs(float(self.config.gripper_feedback_threshold_off_ma))
+        if threshold_off > threshold_on:
+            threshold_off = threshold_on
+        return threshold_on, threshold_off
 
     @property
     def _realtime_debug_enabled(self) -> bool:
@@ -244,6 +256,36 @@ class TurretLeader(Teleoperator):
                 min(limit_ma, -normalized_effort * limit_ma * gain * direction),
             )
 
+            # Check if gripper needs special feedback mode handling.
+            if follower_joint == "gripper" and self.config.gripper_feedback_mode == "threshold_constant":
+                # Hysteresis-based threshold mode for gripper:
+                # - Activate when |I| >= threshold_on
+                # - Keep active until |I| <= threshold_off
+                # - Active state outputs constant opposite-direction resistance
+                threshold_on_ma, threshold_off_ma = self._get_gripper_hysteresis_thresholds()
+                constant_force_ma = abs(self.config.gripper_feedback_constant_force_ma)
+                follower_abs = abs(follower_current_ma)
+
+                if self._gripper_contact_active:
+                    if follower_abs <= threshold_off_ma:
+                        self._gripper_contact_active = False
+                elif follower_abs >= threshold_on_ma:
+                    self._gripper_contact_active = True
+
+                if not self._gripper_contact_active:
+                    target_current_ma = 0.0
+                else:
+                    # Apply opposite-direction constant force for resistance.
+                    sign = 1.0 if follower_current_ma >= 0 else -1.0
+                    target_current_ma = -sign * constant_force_ma * direction
+            else:
+                if follower_joint == "gripper":
+                    self._gripper_contact_active = False
+                # Proportional mode (default for all joints including gripper)
+                target_current_ma = max(
+                    -limit_ma,
+                    min(limit_ma, -normalized_effort * limit_ma * gain * direction),
+                )
             # 5) Quantize mA command to leader model raw current unit.
             target_current_raw = self._to_leader_raw_current(leader_joint, target_current_ma)
             max_raw = max(0, self._to_leader_raw_current(leader_joint, limit_ma))
