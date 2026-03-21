@@ -32,6 +32,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .dynamixel_follower import DynamixelFollower
 
         return DynamixelFollower(config)
+    elif config.type == "manip6dofF":
+        from .manip6dof_follower import Manip6DofFollower
+
+        return Manip6DofFollower(config)
     elif config.type == "turretF":
         from .turret_follower import TurretFollower
 

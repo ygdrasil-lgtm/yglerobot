@@ -51,6 +51,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .turret_leader import TurretLeader
 
         return TurretLeader(config)
+    elif config.type == "manip6dofL":
+        from .manip6dof_leader import Manip6DofLeader
+
+        return Manip6DofLeader(config)
     elif config.type == "so100_leader":
         from .so_leader import SO100Leader
 
