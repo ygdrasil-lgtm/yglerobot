@@ -33,5 +33,8 @@ class Manip6DofFollowerConfig(RobotConfig):
     # names to the max_relative_target value for that motor.
     max_relative_target: float | dict[str, float] | None = None
 
+    # Whether to include motor current values in observations (and thus in recorded datasets).
+    include_motor_current: bool = True
+
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=dict)

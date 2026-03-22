@@ -61,7 +61,8 @@ class Manip6DofFollower(Robot):
         features: dict[str, type] = {}
         for motor in self.bus.motors:
             features[f"{motor}.pos"] = float
-            features[f"{motor}.current"] = float
+            if self.config.include_motor_current:
+                features[f"{motor}.current"] = float
         return features
 
     @property
@@ -172,10 +173,11 @@ class Manip6DofFollower(Robot):
     def get_observation(self) -> RobotObservation:
         start = time.perf_counter()
         pos_dict = self.bus.sync_read("Present_Position")
-        current_dict = self.bus.sync_read("Present_Current")
 
         obs_dict = {f"{motor}.pos": float(val) for motor, val in pos_dict.items()}
-        obs_dict.update({f"{motor}.current": float(val) for motor, val in current_dict.items()})
+        if self.config.include_motor_current:
+            current_dict = self.bus.sync_read("Present_Current")
+            obs_dict.update({f"{motor}.current": float(val) for motor, val in current_dict.items()})
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
